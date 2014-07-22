@@ -1005,7 +1005,7 @@ OMX_ERRORTYPE Exynos_VP8Dec_SetParameter(
         }
 
         if (!Exynos_OSAL_Strcmp((char*)pComponentRole->cRole, EXYNOS_OMX_COMPONENT_VP8_DEC_ROLE)) {
-            pExynosComponent->pExynosPort[INPUT_PORT_INDEX].portDefinition.format.video.eCompressionFormat = OMX_VIDEO_CodingVPX;
+            pExynosComponent->pExynosPort[INPUT_PORT_INDEX].portDefinition.format.video.eCompressionFormat = OMX_VIDEO_CodingVP8;
         } else {
             ret = OMX_ErrorBadParameter;
             goto EXIT;
@@ -1915,7 +1915,7 @@ OSCL_EXPORT_REF OMX_ERRORTYPE Exynos_OMX_ComponentInit(
     pExynosPort->portDefinition.format.video.nStride = 0; /*DEFAULT_FRAME_WIDTH;*/
     pExynosPort->portDefinition.format.video.nSliceHeight = 0;
     pExynosPort->portDefinition.nBufferSize = DEFAULT_VIDEO_INPUT_BUFFER_SIZE;
-    pExynosPort->portDefinition.format.video.eCompressionFormat = OMX_VIDEO_CodingVPX;
+    pExynosPort->portDefinition.format.video.eCompressionFormat = OMX_VIDEO_CodingVP8;
     Exynos_OSAL_Memset(pExynosPort->portDefinition.format.video.cMIMEType, 0, MAX_OMX_MIMETYPE_SIZE);
     Exynos_OSAL_Strcpy(pExynosPort->portDefinition.format.video.cMIMEType, "video/x-vnd.on2.vp8");
     pExynosPort->portDefinition.format.video.pNativeRender = 0;
