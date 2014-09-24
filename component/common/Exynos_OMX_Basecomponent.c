@@ -63,7 +63,7 @@ OMX_ERRORTYPE Exynos_OMX_Check_SizeVersion(OMX_PTR header, OMX_U32 size)
         goto EXIT;
     }
     if (version->s.nVersionMajor != VERSIONMAJOR_NUMBER ||
-        version->s.nVersionMinor != VERSIONMINOR_NUMBER) {
+        version->s.nVersionMinor > VERSIONMINOR_NUMBER) {
         ret = OMX_ErrorVersionMismatch;
         goto EXIT;
     }
@@ -191,6 +191,7 @@ OMX_ERRORTYPE Exynos_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX
     if ((currentState == OMX_StateLoaded) && (destState == OMX_StateIdle)) {
         ret = Exynos_OMX_Get_Resource(pOMXComponent);
         if (ret != OMX_ErrorNone) {
+            Exynos_OSAL_SignalSet(pExynosComponent->abendStateEvent);
             goto EXIT;
         }
     }
@@ -236,7 +237,7 @@ OMX_ERRORTYPE Exynos_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX
                     Exynos_OSAL_SignalTerminate(pExynosComponent->pExynosPort[i].pauseEvent);
                     pExynosComponent->pExynosPort[i].pauseEvent = NULL;
                     if (pExynosComponent->pExynosPort[i].bufferProcessType & BUFFER_SHARE) {
-                        Exynos_OSAL_SignalTerminate(&pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent);
+                        Exynos_OSAL_SignalTerminate(pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent);
                         pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent = NULL;
                     }
                 }
@@ -281,7 +282,7 @@ OMX_ERRORTYPE Exynos_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX
                     Exynos_OSAL_SignalTerminate(pExynosComponent->pExynosPort[i].pauseEvent);
                     pExynosComponent->pExynosPort[i].pauseEvent = NULL;
                     if (pExynosComponent->pExynosPort[i].bufferProcessType & BUFFER_SHARE) {
-                        Exynos_OSAL_SignalTerminate(&pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent);
+                        Exynos_OSAL_SignalTerminate(pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent);
                         pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent = NULL;
                     }
                 }
@@ -307,7 +308,8 @@ OMX_ERRORTYPE Exynos_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX
                     }
                 } else {
                     if (CHECK_PORT_ENABLED(pExynosPort)) {
-                        Exynos_OSAL_SemaphoreWait(pExynosPort->unloadedResource);
+                        if (pExynosPort->assignedBufferNum > 0)
+                            Exynos_OSAL_SemaphoreWait(pExynosPort->unloadedResource);
                         while (Exynos_OSAL_GetElemNum(&pExynosPort->bufferQ) > 0) {
                             message = (EXYNOS_OMX_MESSAGE *)Exynos_OSAL_Dequeue(&pExynosPort->bufferQ);
                             if (message != NULL)
@@ -422,7 +424,7 @@ OMX_ERRORTYPE Exynos_OMX_ComponentStateSet(OMX_COMPONENTTYPE *pOMXComponent, OMX
                         Exynos_OSAL_SignalTerminate(pExynosComponent->pExynosPort[i].pauseEvent);
                         pExynosComponent->pExynosPort[i].pauseEvent = NULL;
                         if (pExynosComponent->pExynosPort[i].bufferProcessType & BUFFER_SHARE) {
-                            Exynos_OSAL_SignalTerminate(&pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent);
+                            Exynos_OSAL_SignalTerminate(pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent);
                             pExynosComponent->pExynosPort[i].hAllCodecBufferReturnEvent = NULL;
                         }
                     }
@@ -993,8 +995,10 @@ OMX_ERRORTYPE Exynos_OMX_GetParameter(
     case OMX_IndexParamPortDefinition:
     {
         OMX_PARAM_PORTDEFINITIONTYPE *portDefinition = (OMX_PARAM_PORTDEFINITIONTYPE *)ComponentParameterStructure;
-        OMX_U32                       portIndex = portDefinition->nPortIndex;
-        EXYNOS_OMX_BASEPORT          *pExynosPort;
+        OMX_U32                       portIndex      = portDefinition->nPortIndex;
+        EXYNOS_OMX_BASEPORT          *pExynosPort    = NULL;
+        /* except nSize, nVersion and nPortIndex */
+        int nOffset = sizeof(OMX_U32) + sizeof(OMX_VERSIONTYPE) + sizeof(OMX_U32);
 
         if (portIndex >= pExynosComponent->portParam.nPorts) {
             ret = OMX_ErrorBadPortIndex;
@@ -1006,7 +1010,9 @@ OMX_ERRORTYPE Exynos_OMX_GetParameter(
         }
 
         pExynosPort = &pExynosComponent->pExynosPort[portIndex];
-        Exynos_OSAL_Memcpy(portDefinition, &pExynosPort->portDefinition, portDefinition->nSize);
+        Exynos_OSAL_Memcpy(((char *)portDefinition) + nOffset,
+                           ((char *)&pExynosPort->portDefinition) + nOffset,
+                           portDefinition->nSize - nOffset);
     }
         break;
     case OMX_IndexParamPriorityMgmt:
@@ -1146,7 +1152,9 @@ OMX_ERRORTYPE Exynos_OMX_SetParameter(
     {
         OMX_PARAM_PORTDEFINITIONTYPE *portDefinition = (OMX_PARAM_PORTDEFINITIONTYPE *)ComponentParameterStructure;
         OMX_U32                       portIndex = portDefinition->nPortIndex;
-        EXYNOS_OMX_BASEPORT          *pExynosPort;
+        EXYNOS_OMX_BASEPORT          *pExynosPort = NULL;
+        /* except nSize, nVersion and nPortIndex */
+        int nOffset = sizeof(OMX_U32) + sizeof(OMX_VERSIONTYPE) + sizeof(OMX_U32);
 
         if (portIndex >= pExynosComponent->portParam.nPorts) {
             ret = OMX_ErrorBadPortIndex;
@@ -1170,7 +1178,9 @@ OMX_ERRORTYPE Exynos_OMX_SetParameter(
             goto EXIT;
         }
 
-        Exynos_OSAL_Memcpy(&pExynosPort->portDefinition, portDefinition, portDefinition->nSize);
+        Exynos_OSAL_Memcpy(((char *)&pExynosPort->portDefinition) + nOffset,
+                           ((char *)portDefinition) + nOffset,
+                           portDefinition->nSize - nOffset);
     }
         break;
     case OMX_IndexParamPriorityMgmt:

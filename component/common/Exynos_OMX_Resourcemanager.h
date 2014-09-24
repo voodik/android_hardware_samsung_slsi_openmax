@@ -32,15 +32,6 @@
 #include "OMX_Component.h"
 
 
-struct EXYNOS_OMX_RM_COMPONENT_LIST;
-typedef struct _EXYNOS_OMX_RM_COMPONENT_LIST
-{
-    OMX_COMPONENTTYPE         *pOMXStandComp;
-    OMX_U32                    groupPriority;
-    struct _EXYNOS_OMX_RM_COMPONENT_LIST *pNext;
-} EXYNOS_OMX_RM_COMPONENT_LIST;
-
-
 #ifdef __cplusplus
 extern "C" {
 #endif

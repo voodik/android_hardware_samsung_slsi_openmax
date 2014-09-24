@@ -32,10 +32,10 @@
 #include "Exynos_OMX_Basecomponent.h"
 #include "Exynos_OMX_Baseport.h"
 #include "Exynos_OMX_Venc.h"
+#include "Exynos_OMX_VencControl.h"
 #include "Exynos_OSAL_ETC.h"
 #include "Exynos_OSAL_Semaphore.h"
 #include "Exynos_OSAL_Thread.h"
-#include "Exynos_OSAL_Android.h"
 #include "library_register.h"
 #include "Exynos_OMX_Mpeg4enc.h"
 #include "Exynos_OSAL_SharedMemory.h"
@@ -208,17 +208,18 @@ static void Set_Mpeg4Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
     EXYNOS_OMX_BASEPORT           *pExynosOutputPort = NULL;
     EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc         = NULL;
     EXYNOS_MPEG4ENC_HANDLE        *pMpeg4Enc         = NULL;
-    EXYNOS_MFC_MPEG4ENC_HANDLE     *pMFCMpeg4Handle;
+    EXYNOS_MFC_MPEG4ENC_HANDLE    *pMFCMpeg4Handle   = NULL;
+    OMX_COLOR_FORMATTYPE           eColorFormat      = OMX_COLOR_FormatUnused;
 
     ExynosVideoEncParam       *pEncParam    = NULL;
     ExynosVideoEncCommonParam *pCommonParam = NULL;
     ExynosVideoEncMpeg4Param  *pMpeg4Param  = NULL;
 
-    pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
-    pMpeg4Enc = pVideoEnc->hCodecHandle;
-    pMFCMpeg4Handle    = &pMpeg4Enc->hMFCMpeg4Handle;
-    pExynosInputPort  = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
-    pExynosOutputPort = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
+    pVideoEnc           = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    pMpeg4Enc           = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;
+    pMFCMpeg4Handle     = &pMpeg4Enc->hMFCMpeg4Handle;
+    pExynosInputPort    = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
+    pExynosOutputPort   = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
 
     pEncParam    = &pMFCMpeg4Handle->encParam;
     pCommonParam = &pEncParam->commonParam;
@@ -234,8 +235,8 @@ static void Set_Mpeg4Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
     pCommonParam->Bitrate      = pExynosOutputPort->portDefinition.format.video.nBitrate;
     pCommonParam->FrameQp      = pVideoEnc->quantization.nQpI;
     pCommonParam->FrameQp_P    = pVideoEnc->quantization.nQpP;
-    pCommonParam->QSCodeMax    = 30;
-    pCommonParam->QSCodeMin    = 10;
+    pCommonParam->QSCodeMin    = pVideoEnc->qpRange.videoMinQP;
+    pCommonParam->QSCodeMax    = pVideoEnc->qpRange.videoMaxQP;
     pCommonParam->PadControlOn = 0; /* 0: Use boundary pixel, 1: Use the below setting value */
     pCommonParam->LumaPadVal   = 0;
     pCommonParam->CbPadVal     = 0;
@@ -250,38 +251,8 @@ static void Set_Mpeg4Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
         pCommonParam->RandomIntraMBRefresh = 0;
     }
 
-    switch ((EXYNOS_OMX_COLOR_FORMATTYPE)pExynosInputPort->portDefinition.format.video.eColorFormat) {
-    case OMX_COLOR_FormatYUV420SemiPlanar:
-    case OMX_COLOR_FormatYUV420Planar: /* Converted to NV12 in Exynos_CSC_InputData */
-        pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-        break;
-#ifdef USE_METADATABUFFERTYPE
-    case OMX_COLOR_FormatAndroidOpaque:
-        if (pExynosInputPort->bufferProcessType == BUFFER_SHARE) {
-            switch (pVideoEnc->ANBColorFormat) {
-            case OMX_COLOR_FormatYUV420SemiPlanar:
-                pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-                break;
-            case OMX_SEC_COLOR_FormatNV12Tiled:
-                pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12_TILED;
-                break;
-            default:
-                pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-                break;
-            }
-        } else {
-            pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-        }
-        break;
-#endif
-    case OMX_SEC_COLOR_FormatNV21Linear:
-        pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV21;
-        break;
-    case OMX_SEC_COLOR_FormatNV12Tiled:
-    default:
-        pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12_TILED;
-        break;
-    }
+    eColorFormat = Exynos_Input_GetActualColorFormat(pExynosComponent);
+    pCommonParam->FrameMap = Exynos_OSAL_OMX2VideoFormat(eColorFormat);
 
     /* Mpeg4 specific parameters */
     pMpeg4Param->ProfileIDC = OMXMpeg4ProfileToMFCProfile(pMpeg4Enc->mpeg4Component[OUTPUT_PORT_INDEX].eProfile);
@@ -326,17 +297,18 @@ static void Set_H263Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
     EXYNOS_OMX_BASEPORT           *pExynosOutputPort = NULL;
     EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc         = NULL;
     EXYNOS_MPEG4ENC_HANDLE        *pMpeg4Enc         = NULL;
-    EXYNOS_MFC_MPEG4ENC_HANDLE     *pMFCMpeg4Handle;
+    EXYNOS_MFC_MPEG4ENC_HANDLE    *pMFCMpeg4Handle   = NULL;
+    OMX_COLOR_FORMATTYPE           eColorFormat      = OMX_COLOR_FormatUnused;
 
     ExynosVideoEncParam       *pEncParam    = NULL;
     ExynosVideoEncCommonParam *pCommonParam = NULL;
     ExynosVideoEncH263Param   *pH263Param   = NULL;
 
-    pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
-    pMpeg4Enc = pVideoEnc->hCodecHandle;
+    pVideoEnc          = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    pMpeg4Enc          = pVideoEnc->hCodecHandle;
     pMFCMpeg4Handle    = &pMpeg4Enc->hMFCMpeg4Handle;
-    pExynosInputPort  = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
-    pExynosOutputPort = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
+    pExynosInputPort   = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
+    pExynosOutputPort  = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
 
     pEncParam    = &pMFCMpeg4Handle->encParam;
     pCommonParam = &pEncParam->commonParam;
@@ -352,8 +324,8 @@ static void Set_H263Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
     pCommonParam->Bitrate      = pExynosOutputPort->portDefinition.format.video.nBitrate;
     pCommonParam->FrameQp      = pVideoEnc->quantization.nQpI;
     pCommonParam->FrameQp_P    = pVideoEnc->quantization.nQpP;
-    pCommonParam->QSCodeMax    = 30;
-    pCommonParam->QSCodeMin    = 10;
+    pCommonParam->QSCodeMin    = pVideoEnc->qpRange.videoMinQP;
+    pCommonParam->QSCodeMax    = pVideoEnc->qpRange.videoMaxQP;
     pCommonParam->PadControlOn = 0; /* 0: Use boundary pixel, 1: Use the below setting value */
     pCommonParam->LumaPadVal   = 0;
     pCommonParam->CbPadVal     = 0;
@@ -368,38 +340,8 @@ static void Set_H263Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
         pCommonParam->RandomIntraMBRefresh = 0;
     }
 
-    switch ((EXYNOS_OMX_COLOR_FORMATTYPE)pExynosInputPort->portDefinition.format.video.eColorFormat) {
-    case OMX_COLOR_FormatYUV420SemiPlanar:
-    case OMX_COLOR_FormatYUV420Planar: /* Converted to NV12 in Exynos_CSC_InputData */
-        pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-        break;
-#ifdef USE_METADATABUFFERTYPE
-    case OMX_COLOR_FormatAndroidOpaque:
-        if (pExynosInputPort->bufferProcessType == BUFFER_SHARE) {
-            switch (pVideoEnc->ANBColorFormat) {
-            case OMX_COLOR_FormatYUV420SemiPlanar:
-                pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-                break;
-            case OMX_SEC_COLOR_FormatNV12Tiled:
-                pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12_TILED;
-                break;
-            default:
-                pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-                break;
-            }
-        } else {
-            pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12;
-        }
-        break;
-#endif
-    case OMX_SEC_COLOR_FormatNV21Linear:
-        pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV21;
-        break;
-    case OMX_SEC_COLOR_FormatNV12Tiled:
-    default:
-        pCommonParam->FrameMap = VIDEO_COLORFORMAT_NV12_TILED;
-        break;
-    }
+    eColorFormat = Exynos_Input_GetActualColorFormat(pExynosComponent);
+    pCommonParam->FrameMap = Exynos_OSAL_OMX2VideoFormat(eColorFormat);
 
     /* H263 specific parameters */
     pH263Param->FrameRate            = (pExynosInputPort->portDefinition.format.video.xFramerate) >> 16;
@@ -474,6 +416,19 @@ static void Change_Mpeg4Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
         setParam = (pExynosInputPort->portDefinition.format.video.xFramerate) >> 16;
         pEncOps->Set_FrameRate(pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle, setParam);
     }
+    if ((pCommonParam->QSCodeMax != (int)pVideoEnc->qpRange.videoMaxQP) ||
+        (pCommonParam->QSCodeMin != (int)pVideoEnc->qpRange.videoMinQP)) {
+        pEncOps->Set_QpRange(pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle,
+                             (int)pVideoEnc->qpRange.videoMinQP, (int)pVideoEnc->qpRange.videoMaxQP);
+    }
+
+#ifdef USE_QOS_CTRL
+    if ((pVideoEnc->bQosChanged == OMX_TRUE) &&
+        (pEncOps->Set_QosRatio != NULL)) {
+        pEncOps->Set_QosRatio(pMFCMpeg4Handle->hMFCHandle, pVideoEnc->nQosRatio);
+        pVideoEnc->bQosChanged = OMX_FALSE;
+    }
+#endif
 
     Set_Mpeg4Enc_Param(pExynosComponent);
 }
@@ -521,6 +476,19 @@ static void Change_H263Enc_Param(EXYNOS_OMX_BASECOMPONENT *pExynosComponent)
         setParam = (pExynosInputPort->portDefinition.format.video.xFramerate) >> 16;
         pEncOps->Set_FrameRate(pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle, setParam);
     }
+    if ((pCommonParam->QSCodeMax != (int)pVideoEnc->qpRange.videoMaxQP) ||
+        (pCommonParam->QSCodeMin != (int)pVideoEnc->qpRange.videoMinQP)) {
+        pEncOps->Set_QpRange(pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle,
+                             (int)pVideoEnc->qpRange.videoMinQP, (int)pVideoEnc->qpRange.videoMaxQP);
+    }
+
+#ifdef USE_QOS_CTRL
+    if ((pVideoEnc->bQosChanged == OMX_TRUE) &&
+        (pEncOps->Set_QosRatio != NULL)) {
+        pEncOps->Set_QosRatio(pMFCMpeg4Handle->hMFCHandle, pVideoEnc->nQosRatio);
+        pVideoEnc->bQosChanged = OMX_FALSE;
+    }
+#endif
 
     Set_H263Enc_Param(pExynosComponent);
 }
@@ -557,7 +525,46 @@ EXIT:
     return ret;
 }
 
-OMX_ERRORTYPE Mpeg4CodecOpen(EXYNOS_MPEG4ENC_HANDLE *pMpeg4Enc)
+OMX_BOOL CheckFormatHWSupport(
+    EXYNOS_OMX_BASECOMPONENT    *pExynosComponent,
+    OMX_COLOR_FORMATTYPE         eColorFormat)
+{
+    OMX_BOOL                         ret            = OMX_FALSE;
+    EXYNOS_OMX_VIDEOENC_COMPONENT   *pVideoEnc      = NULL;
+    EXYNOS_MPEG4ENC_HANDLE          *pMpeg4Enc      = NULL;
+    ExynosVideoColorFormatType       eVideoFormat   = VIDEO_CODING_UNKNOWN;
+    int i;
+
+    FunctionIn();
+
+    if (pExynosComponent == NULL)
+        goto EXIT;
+
+    pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    if (pVideoEnc == NULL)
+        goto EXIT;
+
+    pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;
+    if (pMpeg4Enc == NULL)
+        goto EXIT;
+
+    eVideoFormat = (ExynosVideoColorFormatType)Exynos_OSAL_OMX2VideoFormat(eColorFormat);
+
+    for (i = 0; i < VIDEO_COLORFORMAT_MAX; i++) {
+        if (pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.supportFormat[i] == VIDEO_COLORFORMAT_UNKNOWN)
+            break;
+
+        if (pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.supportFormat[i] == eVideoFormat) {
+            ret = OMX_TRUE;
+            break;
+        }
+    }
+
+EXIT:
+    return ret;
+}
+
+OMX_ERRORTYPE Mpeg4CodecOpen(EXYNOS_MPEG4ENC_HANDLE *pMpeg4Enc, ExynosVideoInstInfo *pVideoInstInfo)
 {
     OMX_ERRORTYPE           ret = OMX_ErrorNone;
 
@@ -616,10 +623,11 @@ OMX_ERRORTYPE Mpeg4CodecOpen(EXYNOS_MPEG4ENC_HANDLE *pMpeg4Enc)
 
     /* alloc context, open, querycap */
 #ifdef USE_DMA_BUF
-    pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.pEncOps->Init(V4L2_MEMORY_DMABUF);
+    pVideoInstInfo->nMemoryType = V4L2_MEMORY_DMABUF;
 #else
-    pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.pEncOps->Init(V4L2_MEMORY_USERPTR);
+    pVideoInstInfo->nMemoryType = V4L2_MEMORY_USERPTR;
 #endif
+    pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.pEncOps->Init(pVideoInstInfo);
     if (pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle == NULL) {
         Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "Failed to allocate context buffer");
         ret = OMX_ErrorInsufficientResources;
@@ -673,6 +681,10 @@ OMX_ERRORTYPE Mpeg4CodecClose(EXYNOS_MPEG4ENC_HANDLE *pMpeg4Enc)
         pEncOps->Finalize(hMFCHandle);
         hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle = NULL;
     }
+
+    /* Unregister function pointers */
+    Exynos_Video_Unregister_Encoder(pEncOps, pInbufOps, pOutbufOps);
+
     if (pOutbufOps != NULL) {
         Exynos_OSAL_Free(pOutbufOps);
         pOutbufOps = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps = NULL;
@@ -845,7 +857,7 @@ EXIT:
 OMX_ERRORTYPE Mpeg4CodecRegistCodecBuffers(
     OMX_COMPONENTTYPE   *pOMXComponent,
     OMX_U32              nPortIndex,
-    OMX_U32              nBufferCnt)
+    int                  nBufferCnt)
 {
     OMX_ERRORTYPE                    ret                = OMX_ErrorNone;
     EXYNOS_OMX_BASECOMPONENT        *pExynosComponent   = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
@@ -856,21 +868,20 @@ OMX_ERRORTYPE Mpeg4CodecRegistCodecBuffers(
     ExynosVideoEncBufferOps         *pBufOps            = NULL;
     ExynosVideoPlane                *pPlanes            = NULL;
 
-    OMX_U32 nPlaneCnt = 0;
+    int nPlaneCnt = 0;
     int i, j;
 
     FunctionIn();
 
     if (nPortIndex == INPUT_PORT_INDEX) {
         ppCodecBuffer   = &(pVideoEnc->pMFCEncInputBuffer[0]);
-        nPlaneCnt       = MFC_INPUT_BUFFER_PLANE;
         pBufOps         = pMpeg4Enc->hMFCMpeg4Handle.pInbufOps;
     } else {
         ppCodecBuffer   = &(pVideoEnc->pMFCEncOutputBuffer[0]);
-        nPlaneCnt       = MFC_OUTPUT_BUFFER_PLANE;
         pBufOps         = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
     }
 
+    nPlaneCnt = Exynos_GetPlaneFromPort(&pExynosComponent->pExynosPort[nPortIndex]);
     pPlanes = (ExynosVideoPlane *)Exynos_OSAL_Malloc(sizeof(ExynosVideoPlane) * nPlaneCnt);
     if (pPlanes == NULL) {
         ret = OMX_ErrorInsufficientResources;
@@ -982,16 +993,16 @@ OMX_ERRORTYPE Mpeg4CodecSrcSetup(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX_DA
     FunctionIn();
 
     if ((oneFrameSize <= 0) && (pSrcInputData->nFlags & OMX_BUFFERFLAG_EOS)) {
-        OMX_BUFFERHEADERTYPE *OMXBuffer = NULL;
-        OMXBuffer = Exynos_OutputBufferGetQueue_Direct(pExynosComponent);
-        if (OMXBuffer == NULL) {
-            ret = OMX_ErrorUndefined;
+        BYPASS_BUFFER_INFO *pBufferInfo = (BYPASS_BUFFER_INFO *)Exynos_OSAL_Malloc(sizeof(BYPASS_BUFFER_INFO));
+        if (pBufferInfo == NULL) {
+            ret = OMX_ErrorInsufficientResources;
             goto EXIT;
         }
 
-        OMXBuffer->nTimeStamp = pSrcInputData->timeStamp;
-        OMXBuffer->nFlags = pSrcInputData->nFlags;
-        Exynos_OMX_OutputBufferReturn(pOMXComponent, OMXBuffer);
+        pBufferInfo->nFlags     = pSrcInputData->nFlags;
+        pBufferInfo->timeStamp  = pSrcInputData->timeStamp;
+        ret = Exynos_OSAL_Queue(&pMpeg4Enc->bypassBufferInfoQ, (void *)pBufferInfo);
+        Exynos_OSAL_SignalSet(pMpeg4Enc->hDestinationStartEvent);
 
         ret = OMX_ErrorNone;
         goto EXIT;
@@ -1016,12 +1027,10 @@ OMX_ERRORTYPE Mpeg4CodecSrcSetup(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX_DA
     bufferConf.eColorFormat = pEncParam->commonParam.FrameMap;
     bufferConf.nFrameWidth = pExynosInputPort->portDefinition.format.video.nFrameWidth;
     bufferConf.nFrameHeight = pExynosInputPort->portDefinition.format.video.nFrameHeight;
+    bufferConf.nStride = ALIGN(pExynosInputPort->portDefinition.format.video.nFrameWidth, 16);
+    bufferConf.nPlaneCnt = Exynos_GetPlaneFromPort(pExynosInputPort);
     pInbufOps->Set_Shareable(hMFCHandle);
-    if (pExynosInputPort->bufferProcessType & BUFFER_SHARE) {
-        inputBufferNumber = MAX_INPUTBUFFER_NUM_DYNAMIC;
-    } else if (pExynosInputPort->bufferProcessType & BUFFER_COPY) {
-        inputBufferNumber = MFC_INPUT_BUFFER_NUM_MAX;
-    }
+    inputBufferNumber = MAX_INPUTBUFFER_NUM_DYNAMIC;
 
     if (pExynosInputPort->bufferProcessType & BUFFER_COPY) {
         /* should be done before prepare input buffer */
@@ -1047,23 +1056,13 @@ OMX_ERRORTYPE Mpeg4CodecSrcSetup(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX_DA
         goto EXIT;
     }
 
-    ExynosVideoPlane planes[MFC_INPUT_BUFFER_PLANE];
-    int plane;
-
-    if (pExynosInputPort->bufferProcessType & BUFFER_COPY) {
-        ret = Mpeg4CodecRegistCodecBuffers(pOMXComponent, INPUT_PORT_INDEX, MFC_INPUT_BUFFER_NUM_MAX);
-        if (ret != OMX_ErrorNone)
-            goto EXIT;
-    } else if (pExynosInputPort->bufferProcessType & BUFFER_SHARE) {
-        if (pExynosInputPort->bStoreMetaData == OMX_TRUE) {
-            /*************/
-            /*    TBD    */
-            /*************/
-            /* Does not require any actions. */
-        } else {
-            ret = OMX_ErrorNotImplemented;
-            goto EXIT;
-        }
+    if ((pExynosInputPort->bufferProcessType & BUFFER_SHARE)
+#ifdef USE_METADATABUFFERTYPE
+        && (pExynosInputPort->bStoreMetaData != OMX_TRUE)
+#endif
+        ) {
+        ret = OMX_ErrorNotImplemented;
+        goto EXIT;
     }
 
     pMpeg4Enc->hMFCMpeg4Handle.bConfiguredMFCSrc = OMX_TRUE;
@@ -1094,7 +1093,12 @@ OMX_ERRORTYPE Mpeg4CodecDstSetup(OMX_COMPONENTTYPE *pOMXComponent)
 
     FunctionIn();
 
-    int OutBufferSize = pExynosOutputPort->portDefinition.format.video.nFrameWidth * pExynosOutputPort->portDefinition.format.video.nFrameHeight * 3 / 2;
+    int nOutBufSize = pExynosOutputPort->portDefinition.nBufferSize;
+    if (pExynosOutputPort->bStoreMetaData == OMX_TRUE) {
+        nOutBufSize = pExynosOutputPort->portDefinition.format.video.nFrameWidth *
+                          pExynosOutputPort->portDefinition.format.video.nFrameHeight * 3 / 2;
+    }
+
     /* set geometry for output (dst) */
     if (pOutbufOps->Set_Geometry) {
         /* only 2 config values needed */
@@ -1102,7 +1106,8 @@ OMX_ERRORTYPE Mpeg4CodecDstSetup(OMX_COMPONENTTYPE *pOMXComponent)
             bufferConf.eCompressionFormat = VIDEO_CODING_MPEG4;
         else
             bufferConf.eCompressionFormat = VIDEO_CODING_H263;
-        bufferConf.nSizeImage = OutBufferSize;
+        bufferConf.nSizeImage = nOutBufSize;
+        bufferConf.nPlaneCnt = Exynos_GetPlaneFromPort(pExynosOutputPort);
 
         if (pOutbufOps->Set_Geometry(pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle, &bufferConf) != VIDEO_ERROR_NONE) {
             Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "Failed to set geometry for output buffer");
@@ -1135,39 +1140,35 @@ OMX_ERRORTYPE Mpeg4CodecDstSetup(OMX_COMPONENTTYPE *pOMXComponent)
         goto EXIT;
     }
 
-    OMX_U32 dataLen[MFC_OUTPUT_BUFFER_PLANE] = {0};
+    OMX_U32 dataLen[VIDEO_BUFFER_MAX_PLANES] = {0, 0, 0};
     if (pExynosOutputPort->bufferProcessType & BUFFER_COPY) {
-        OMX_U32 nPlaneSize[MFC_OUTPUT_BUFFER_PLANE] = {0};
-        nPlaneSize[0] = OutBufferSize;
+        OMX_U32 nPlaneSize[VIDEO_BUFFER_MAX_PLANES] = {0, 0, 0};
+        nPlaneSize[0] = nOutBufSize;
         ret = Exynos_Allocate_CodecBuffers(pOMXComponent, OUTPUT_PORT_INDEX, MFC_OUTPUT_BUFFER_NUM_MAX, nPlaneSize);
-        if (ret != OMX_ErrorNone)
-            goto EXIT;
-
-        ret = Mpeg4CodecRegistCodecBuffers(pOMXComponent, OUTPUT_PORT_INDEX, MFC_OUTPUT_BUFFER_NUM_MAX);
         if (ret != OMX_ErrorNone)
             goto EXIT;
 
         /* Enqueue output buffer */
         for (i = 0; i < MFC_OUTPUT_BUFFER_NUM_MAX; i++) {
-            pOutbufOps->Enqueue(hMFCHandle, (unsigned char **)pVideoEnc->pMFCEncOutputBuffer[i]->pVirAddr,
-                                (unsigned int *)dataLen, MFC_OUTPUT_BUFFER_PLANE, NULL);
+            pOutbufOps->ExtensionEnqueue(hMFCHandle,
+                                (void **)pVideoEnc->pMFCEncOutputBuffer[i]->pVirAddr,
+                                (int *)pVideoEnc->pMFCEncOutputBuffer[i]->fd,
+                                (unsigned long *)pVideoEnc->pMFCEncOutputBuffer[i]->bufferSize,
+                                (unsigned long *)dataLen,
+                                Exynos_GetPlaneFromPort(pExynosOutputPort),
+                                NULL);
+        }
+
+        if (pOutbufOps->Run(hMFCHandle) != VIDEO_ERROR_NONE) {
+            Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "Failed to run output buffer");
+            ret = OMX_ErrorInsufficientResources;
+            goto EXIT;
         }
     } else if (pExynosOutputPort->bufferProcessType & BUFFER_SHARE) {
         /* Register output buffer */
         /*************/
         /*    TBD    */
         /*************/
-        ExynosVideoPlane plane;
-        for (i = 0; i < pExynosOutputPort->portDefinition.nBufferCountActual; i++) {
-            plane.addr = pExynosOutputPort->extendBufferHeader[i].OMXBufferHeader->pBuffer;
-            plane.fd = pExynosOutputPort->extendBufferHeader[i].buf_fd[0];
-            plane.allocSize = OutBufferSize;
-            if (pOutbufOps->Register(hMFCHandle, &plane, MFC_OUTPUT_BUFFER_PLANE) != VIDEO_ERROR_NONE) {
-                Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "Failed to Register output buffer");
-                ret = OMX_ErrorInsufficientResources;
-                goto EXIT;
-            }
-        }
     }
     pMpeg4Enc->hMFCMpeg4Handle.bConfiguredMFCDst = OMX_TRUE;
 
@@ -1216,6 +1217,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_GetParameter(
         OMX_VIDEO_PARAM_MPEG4TYPE *pDstMpeg4Component = (OMX_VIDEO_PARAM_MPEG4TYPE *)pComponentParameterStructure;
         OMX_VIDEO_PARAM_MPEG4TYPE *pSrcMpeg4Component = NULL;
         EXYNOS_MPEG4ENC_HANDLE    *pMpeg4Enc = NULL;
+        /* except nSize, nVersion and nPortIndex */
+        int nOffset = sizeof(OMX_U32) + sizeof(OMX_VERSIONTYPE) + sizeof(OMX_U32);
 
         ret = Exynos_OMX_Check_SizeVersion(pDstMpeg4Component, sizeof(OMX_VIDEO_PARAM_MPEG4TYPE));
         if (ret != OMX_ErrorNone) {
@@ -1230,7 +1233,9 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_GetParameter(
         pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
         pSrcMpeg4Component = &pMpeg4Enc->mpeg4Component[pDstMpeg4Component->nPortIndex];
 
-        Exynos_OSAL_Memcpy(pDstMpeg4Component, pSrcMpeg4Component, sizeof(OMX_VIDEO_PARAM_MPEG4TYPE));
+        Exynos_OSAL_Memcpy(((char *)pDstMpeg4Component) + nOffset,
+                           ((char *)pSrcMpeg4Component) + nOffset,
+                           sizeof(OMX_VIDEO_PARAM_MPEG4TYPE) - nOffset);
     }
         break;
     case OMX_IndexParamVideoH263:
@@ -1238,6 +1243,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_GetParameter(
         OMX_VIDEO_PARAM_H263TYPE  *pDstH263Component = (OMX_VIDEO_PARAM_H263TYPE *)pComponentParameterStructure;
         OMX_VIDEO_PARAM_H263TYPE  *pSrcH263Component = NULL;
         EXYNOS_MPEG4ENC_HANDLE    *pMpeg4Enc = NULL;
+        /* except nSize, nVersion and nPortIndex */
+        int nOffset = sizeof(OMX_U32) + sizeof(OMX_VERSIONTYPE) + sizeof(OMX_U32);
 
         ret = Exynos_OMX_Check_SizeVersion(pDstH263Component, sizeof(OMX_VIDEO_PARAM_H263TYPE));
         if (ret != OMX_ErrorNone) {
@@ -1252,7 +1259,9 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_GetParameter(
         pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
         pSrcH263Component = &pMpeg4Enc->h263Component[pDstH263Component->nPortIndex];
 
-        Exynos_OSAL_Memcpy(pDstH263Component, pSrcH263Component, sizeof(OMX_VIDEO_PARAM_H263TYPE));
+        Exynos_OSAL_Memcpy(((char *)pDstH263Component) + nOffset,
+                           ((char *)pSrcH263Component) + nOffset,
+                           sizeof(OMX_VIDEO_PARAM_H263TYPE) - nOffset);
     }
         break;
     case OMX_IndexParamStandardComponentRole:
@@ -1411,6 +1420,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SetParameter(
         OMX_VIDEO_PARAM_MPEG4TYPE *pDstMpeg4Component = NULL;
         OMX_VIDEO_PARAM_MPEG4TYPE *pSrcMpeg4Component = (OMX_VIDEO_PARAM_MPEG4TYPE *)pComponentParameterStructure;
         EXYNOS_MPEG4ENC_HANDLE    *pMpeg4Enc = NULL;
+        /* except nSize, nVersion and nPortIndex */
+        int nOffset = sizeof(OMX_U32) + sizeof(OMX_VERSIONTYPE) + sizeof(OMX_U32);
 
         ret = Exynos_OMX_Check_SizeVersion(pSrcMpeg4Component, sizeof(OMX_VIDEO_PARAM_MPEG4TYPE));
         if (ret != OMX_ErrorNone) {
@@ -1425,7 +1436,9 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SetParameter(
         pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
         pDstMpeg4Component = &pMpeg4Enc->mpeg4Component[pSrcMpeg4Component->nPortIndex];
 
-        Exynos_OSAL_Memcpy(pDstMpeg4Component, pSrcMpeg4Component, sizeof(OMX_VIDEO_PARAM_MPEG4TYPE));
+        Exynos_OSAL_Memcpy(((char *)pDstMpeg4Component) + nOffset,
+                           ((char *)pSrcMpeg4Component) + nOffset,
+                           sizeof(OMX_VIDEO_PARAM_MPEG4TYPE) - nOffset);
     }
         break;
     case OMX_IndexParamVideoH263:
@@ -1433,6 +1446,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SetParameter(
         OMX_VIDEO_PARAM_H263TYPE *pDstH263Component = NULL;
         OMX_VIDEO_PARAM_H263TYPE *pSrcH263Component = (OMX_VIDEO_PARAM_H263TYPE *)pComponentParameterStructure;
         EXYNOS_MPEG4ENC_HANDLE   *pMpeg4Enc = NULL;
+        /* except nSize, nVersion and nPortIndex */
+        int nOffset = sizeof(OMX_U32) + sizeof(OMX_VERSIONTYPE) + sizeof(OMX_U32);
 
         ret = Exynos_OMX_Check_SizeVersion(pSrcH263Component, sizeof(OMX_VIDEO_PARAM_H263TYPE));
         if (ret != OMX_ErrorNone) {
@@ -1447,7 +1462,9 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SetParameter(
         pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
         pDstH263Component = &pMpeg4Enc->h263Component[pSrcH263Component->nPortIndex];
 
-        Exynos_OSAL_Memcpy(pDstH263Component, pSrcH263Component, sizeof(OMX_VIDEO_PARAM_H263TYPE));
+        Exynos_OSAL_Memcpy(((char *)pDstH263Component) + nOffset,
+                           ((char *)pSrcH263Component) + nOffset,
+                           sizeof(OMX_VIDEO_PARAM_H263TYPE) - nOffset);
     }
         break;
     case OMX_IndexParamStandardComponentRole:
@@ -1627,7 +1644,7 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SetConfig(
     pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
     pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;
 
-    switch (nIndex) {
+    switch ((int)nIndex) {
     case OMX_IndexConfigVideoIntraPeriod:
     {
         OMX_U32 nPFrames = (*((OMX_U32 *)pComponentConfigStructure)) - 1;
@@ -1687,12 +1704,14 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_GetExtensionIndex(
         ret = OMX_ErrorInvalidState;
         goto EXIT;
     }
+
     if (Exynos_OSAL_Strcmp(cParameterName, EXYNOS_INDEX_CONFIG_VIDEO_INTRAPERIOD) == 0) {
         *pIndexType = OMX_IndexConfigVideoIntraPeriod;
         ret = OMX_ErrorNone;
-    } else {
-        ret = Exynos_OMX_VideoEncodeGetExtensionIndex(hComponent, cParameterName, pIndexType);
+        goto EXIT;
     }
+
+    ret = Exynos_OMX_VideoEncodeGetExtensionIndex(hComponent, cParameterName, pIndexType);
 
 EXIT:
     FunctionOut();
@@ -1751,45 +1770,65 @@ EXIT:
 /* MFC Init */
 OMX_ERRORTYPE Exynos_Mpeg4Enc_Init(OMX_COMPONENTTYPE *pOMXComponent)
 {
-    OMX_ERRORTYPE             ret = OMX_ErrorNone;
-    EXYNOS_OMX_BASECOMPONENT      *pExynosComponent = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
-    EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
-    EXYNOS_OMX_BASEPORT      *pExynosInputPort = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
-    EXYNOS_OMX_BASEPORT      *pExynosOutputPort = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
-    EXYNOS_MPEG4ENC_HANDLE    *pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;;
-    EXYNOS_MFC_MPEG4ENC_HANDLE     *pMFCMpeg4Handle    = &pMpeg4Enc->hMFCMpeg4Handle;
-    OMX_PTR                   hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
-    OMX_COLOR_FORMATTYPE      eColorFormat;
+    OMX_ERRORTYPE                    ret                = OMX_ErrorNone;
+    EXYNOS_OMX_BASECOMPONENT        *pExynosComponent   = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
+    EXYNOS_OMX_VIDEOENC_COMPONENT   *pVideoEnc          = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    EXYNOS_OMX_BASEPORT             *pExynosInputPort   = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
+    EXYNOS_OMX_BASEPORT             *pExynosOutputPort  = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
+    EXYNOS_MPEG4ENC_HANDLE          *pMpeg4Enc          = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;;
+    EXYNOS_MFC_MPEG4ENC_HANDLE      *pMFCMpeg4Handle    = &pMpeg4Enc->hMFCMpeg4Handle;
+    OMX_PTR                          hMFCHandle         = NULL;
+    OMX_COLOR_FORMATTYPE             eColorFormat       = OMX_COLOR_FormatUnused;
 
-    ExynosVideoEncOps       *pEncOps    = NULL;
-    ExynosVideoEncBufferOps *pInbufOps  = NULL;
-    ExynosVideoEncBufferOps *pOutbufOps = NULL;
+    ExynosVideoEncOps       *pEncOps        = NULL;
+    ExynosVideoEncBufferOps *pInbufOps      = NULL;
+    ExynosVideoEncBufferOps *pOutbufOps     = NULL;
+    ExynosVideoInstInfo     *pVideoInstInfo = &(pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo);
 
     CSC_METHOD csc_method = CSC_METHOD_SW;
-    int i = 0;
+    int i = 0, nPlaneCnt;
 
     FunctionIn();
 
     pMpeg4Enc->hMFCMpeg4Handle.bConfiguredMFCSrc = OMX_FALSE;
     pMpeg4Enc->hMFCMpeg4Handle.bConfiguredMFCDst = OMX_FALSE;
+    pVideoEnc->bFirstInput  = OMX_TRUE;
     pVideoEnc->bFirstOutput = OMX_FALSE;
     pExynosComponent->bUseFlagEOF = OMX_TRUE;
     pExynosComponent->bSaveFlagEOS = OMX_FALSE;
     pExynosComponent->bBehaviorEOS = OMX_FALSE;
 
     eColorFormat = pExynosInputPort->portDefinition.format.video.eColorFormat;
+#ifdef USE_METADATABUFFERTYPE
     if (pExynosInputPort->bStoreMetaData == OMX_TRUE) {
-        if (eColorFormat == OMX_COLOR_FormatAndroidOpaque) {
+#ifdef USE_ANDROIDOPAQUE
+        if (eColorFormat == (OMX_COLOR_FORMATTYPE)OMX_COLOR_FormatAndroidOpaque) {
             pExynosInputPort->bufferProcessType = BUFFER_COPY;
         } else {
             pExynosInputPort->bufferProcessType = BUFFER_SHARE;
         }
+#else
+       pExynosInputPort->bufferProcessType = BUFFER_SHARE;
+#endif
     } else {
         pExynosInputPort->bufferProcessType = BUFFER_COPY;
     }
+#else
+    pExynosInputPort->bufferProcessType = BUFFER_COPY;
+#endif
+
+    Exynos_OSAL_Log(EXYNOS_LOG_TRACE, " CodecOpen W: %d H:%d  Bitrate:%d FPS:%d", pExynosInputPort->portDefinition.format.video.nFrameWidth,
+                                                                                  pExynosInputPort->portDefinition.format.video.nFrameHeight,
+                                                                                  pExynosInputPort->portDefinition.format.video.nBitrate,
+                                                                                  pExynosInputPort->portDefinition.format.video.xFramerate);
+    pVideoInstInfo->nSize       = sizeof(ExynosVideoInstInfo);
+    pVideoInstInfo->nWidth      = pExynosInputPort->portDefinition.format.video.nFrameWidth;
+    pVideoInstInfo->nHeight     = pExynosInputPort->portDefinition.format.video.nFrameHeight;
+    pVideoInstInfo->nBitrate    = pExynosInputPort->portDefinition.format.video.nBitrate;
+    pVideoInstInfo->xFramerate  = pExynosInputPort->portDefinition.format.video.xFramerate;
 
     /* Mpeg4/H.263 Codec Open */
-    ret = Mpeg4CodecOpen(pMpeg4Enc);
+    ret = Mpeg4CodecOpen(pMpeg4Enc, pVideoInstInfo);
     if (ret != OMX_ErrorNone) {
         goto EXIT;
     }
@@ -1797,30 +1836,10 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_Init(OMX_COMPONENTTYPE *pOMXComponent)
     pEncOps    = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
     pInbufOps  = pMpeg4Enc->hMFCMpeg4Handle.pInbufOps;
     pOutbufOps = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
+    hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
 
-    if ((pExynosInputPort->bStoreMetaData != OMX_TRUE) &&
-        (eColorFormat != OMX_COLOR_FormatAndroidOpaque)) {
-        if (pExynosInputPort->bufferProcessType & BUFFER_COPY) {
-            OMX_U32 nPlaneSize[MFC_INPUT_BUFFER_PLANE] = {0, };
-            nPlaneSize[0] = DEFAULT_MFC_INPUT_YBUFFER_SIZE;
-            nPlaneSize[1] = DEFAULT_MFC_INPUT_CBUFFER_SIZE;
-
-            Exynos_OSAL_SemaphoreCreate(&pExynosInputPort->codecSemID);
-            Exynos_OSAL_QueueCreate(&pExynosInputPort->codecBufferQ, MAX_QUEUE_ELEMENTS);
-
-            ret = Exynos_Allocate_CodecBuffers(pOMXComponent, INPUT_PORT_INDEX, MFC_INPUT_BUFFER_NUM_MAX, nPlaneSize);
-            if (ret != OMX_ErrorNone)
-                goto EXIT;
-
-            for (i = 0; i < MFC_INPUT_BUFFER_NUM_MAX; i++)
-                Exynos_CodecBufferEnqueue(pExynosComponent, INPUT_PORT_INDEX, pVideoEnc->pMFCEncInputBuffer[i]);
-        } else if (pExynosInputPort->bufferProcessType & BUFFER_SHARE) {
-            /*************/
-            /*    TBD    */
-            /*************/
-            /* Does not require any actions. */
-        }
-    }
+    Exynos_SetPlaneToPort(pExynosInputPort, MFC_DEFAULT_INPUT_BUFFER_PLANE);
+    Exynos_SetPlaneToPort(pExynosOutputPort, MFC_DEFAULT_OUTPUT_BUFFER_PLANE);
 
     if (pExynosOutputPort->bufferProcessType & BUFFER_COPY) {
         Exynos_OSAL_SemaphoreCreate(&pExynosOutputPort->codecSemID);
@@ -1843,6 +1862,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_Init(OMX_COMPONENTTYPE *pOMXComponent)
     pMpeg4Enc->hMFCMpeg4Handle.outputIndexTimestamp = 0;
 
     pExynosComponent->getAllDelayBuffer = OMX_FALSE;
+
+    Exynos_OSAL_QueueCreate(&pMpeg4Enc->bypassBufferInfoQ, QUEUE_ELEMENTS);
 
 #ifdef USE_CSC_HW
     csc_method = CSC_METHOD_HW;
@@ -1884,6 +1905,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_Terminate(OMX_COMPONENTTYPE *pOMXComponent)
         pVideoEnc->csc_handle = NULL;
     }
 
+    Exynos_OSAL_QueueTerminate(&pMpeg4Enc->bypassBufferInfoQ);
+
     Exynos_OSAL_SignalTerminate(pMpeg4Enc->hDestinationStartEvent);
     pMpeg4Enc->hDestinationStartEvent = NULL;
     pMpeg4Enc->bDestinationStart = OMX_FALSE;
@@ -1922,19 +1945,25 @@ EXIT:
 
 OMX_ERRORTYPE Exynos_Mpeg4Enc_SrcIn(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX_DATA *pSrcInputData)
 {
-    OMX_ERRORTYPE               ret = OMX_ErrorNone;
-    EXYNOS_OMX_BASECOMPONENT      *pExynosComponent = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
-    EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
-    EXYNOS_MPEG4ENC_HANDLE         *pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
-    void                          *hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
-    EXYNOS_OMX_BASEPORT *pExynosInputPort = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
-    EXYNOS_OMX_BASEPORT *pExynosOutputPort = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
-    OMX_U32  oneFrameSize = pSrcInputData->dataLen;
-    ExynosVideoEncOps       *pEncOps    = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
-    ExynosVideoEncBufferOps *pInbufOps  = pMpeg4Enc->hMFCMpeg4Handle.pInbufOps;
-    ExynosVideoEncBufferOps *pOutbufOps = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
-    ExynosVideoErrorType codecReturn = VIDEO_ERROR_NONE;
-    int i;
+    OMX_ERRORTYPE                    ret                = OMX_ErrorNone;
+    EXYNOS_OMX_BASECOMPONENT        *pExynosComponent   = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
+    EXYNOS_OMX_VIDEOENC_COMPONENT   *pVideoEnc          = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    EXYNOS_MPEG4ENC_HANDLE          *pMpeg4Enc          = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;
+    void                            *hMFCHandle         = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
+    EXYNOS_OMX_BASEPORT             *pExynosInputPort   = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
+    EXYNOS_OMX_BASEPORT             *pExynosOutputPort  = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
+    OMX_U32                          oneFrameSize       = pSrcInputData->dataLen;
+    OMX_COLOR_FORMATTYPE             inputColorFormat   = OMX_COLOR_FormatUnused;
+
+    OMX_BUFFERHEADERTYPE tempBufferHeader;
+    void *pPrivate = NULL;
+
+    ExynosVideoEncOps       *pEncOps     = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
+    ExynosVideoEncBufferOps *pInbufOps   = pMpeg4Enc->hMFCMpeg4Handle.pInbufOps;
+    ExynosVideoEncBufferOps *pOutbufOps  = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
+    ExynosVideoErrorType     codecReturn = VIDEO_ERROR_NONE;
+
+    int i, nPlaneCnt;
 
     FunctionIn();
 
@@ -1958,10 +1987,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SrcIn(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX
 
     if ((pSrcInputData->dataLen > 0) ||
         ((pSrcInputData->nFlags & OMX_BUFFERFLAG_EOS) == OMX_BUFFERFLAG_EOS)) {
-        OMX_U32 nAllocLen[MFC_INPUT_BUFFER_PLANE] = {0, 0};
-        OMX_U32 pMFCYUVDataSize[MFC_INPUT_BUFFER_PLANE]  = {NULL, NULL};
-        ExynosVideoPlane planes[MFC_INPUT_BUFFER_PLANE];
-        int plane;
+        OMX_U32 nDataSize[MAX_BUFFER_PLANE]     = {0, 0, 0};
+        OMX_U32 nAllocSize[MAX_BUFFER_PLANE]    = {0, 0, 0};
 
         pExynosComponent->timeStamp[pMpeg4Enc->hMFCMpeg4Handle.indexTimestamp] = pSrcInputData->timeStamp;
         pExynosComponent->nFlags[pMpeg4Enc->hMFCMpeg4Handle.indexTimestamp] = pSrcInputData->nFlags;
@@ -1972,29 +1999,40 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SrcIn(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX
 
         /* queue work for input buffer */
         Exynos_OSAL_Log(EXYNOS_LOG_TRACE, "Exynos_Mpeg4Enc_SrcIn(): oneFrameSize: %d, bufferHeader: 0x%x", oneFrameSize, pSrcInputData->bufferHeader);
-        pMFCYUVDataSize[0] = pExynosInputPort->portDefinition.format.video.nFrameWidth * pExynosInputPort->portDefinition.format.video.nFrameHeight;
-        pMFCYUVDataSize[1] = pMFCYUVDataSize[0] / 2;
 
-#ifdef USE_METADATABUFFERTYPE
-        nAllocLen[0] = ALIGN_TO_16B(pExynosInputPort->portDefinition.format.video.nFrameWidth) *
-                       ALIGN_TO_16B(pExynosInputPort->portDefinition.format.video.nFrameHeight);
-        nAllocLen[1] = ALIGN(nAllocLen[0] / 2,256);
+        inputColorFormat = Exynos_Input_GetActualColorFormat(pExynosComponent);
+        Exynos_OSAL_GetPlaneSize(inputColorFormat,
+                                 pExynosInputPort->portDefinition.format.video.nFrameWidth,
+                                 pExynosInputPort->portDefinition.format.video.nFrameHeight,
+                                 nDataSize,
+                                 nAllocSize);
 
-        if ((pExynosInputPort->bStoreMetaData == OMX_TRUE) &&
-            (pExynosInputPort->bufferProcessType & BUFFER_SHARE)) {
-            codecReturn = pInbufOps->ExtensionEnqueue(hMFCHandle,
-                                        (unsigned char **)pSrcInputData->buffer.multiPlaneBuffer.dataBuffer,
-                                        (unsigned char **)pSrcInputData->buffer.multiPlaneBuffer.fd,
-                                        (unsigned int *)nAllocLen, (unsigned int *)pMFCYUVDataSize,
-                                        MFC_INPUT_BUFFER_PLANE, pSrcInputData->bufferHeader);
+        if (pExynosInputPort->bufferProcessType == BUFFER_COPY) {
+            tempBufferHeader.nFlags     = pSrcInputData->nFlags;
+            tempBufferHeader.nTimeStamp = pSrcInputData->timeStamp;
+            pPrivate = (void *)&tempBufferHeader;
         } else {
-            codecReturn = pInbufOps->Enqueue(hMFCHandle, (unsigned char **)pSrcInputData->buffer.multiPlaneBuffer.dataBuffer,
-                                        (unsigned int *)pMFCYUVDataSize, MFC_INPUT_BUFFER_PLANE, pSrcInputData->bufferHeader);
+            pPrivate = (void *)pSrcInputData->bufferHeader;
         }
-#else
-        codecReturn = pInbufOps->Enqueue(hMFCHandle, (unsigned char **)pSrcInputData->buffer.multiPlaneBuffer.dataBuffer,
-                                    (unsigned int *)pMFCYUVDataSize, MFC_INPUT_BUFFER_PLANE, pSrcInputData->bufferHeader);
-#endif
+
+        nPlaneCnt = Exynos_GetPlaneFromPort(pExynosInputPort);
+        if (pVideoEnc->nInbufSpareSize> 0) {
+            for (i = 0; i < nPlaneCnt; i++)
+                nAllocSize[i] = nAllocSize[i] + pVideoEnc->nInbufSpareSize;
+        }
+
+        if (pSrcInputData->dataLen == 0) {
+            for (i = 0; i < nPlaneCnt; i++)
+                nDataSize[i] = 0;
+        }
+
+        codecReturn = pInbufOps->ExtensionEnqueue(hMFCHandle,
+                                    (void **)pSrcInputData->multiPlaneBuffer.dataBuffer,
+                                    (int *)pSrcInputData->multiPlaneBuffer.fd,
+                                    (unsigned long *)nAllocSize,
+                                    (unsigned long *)nDataSize,
+                                    nPlaneCnt,
+                                    pPrivate);
         if (codecReturn != VIDEO_ERROR_NONE) {
             Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "%s: %d: Failed - pInbufOps->Enqueue", __FUNCTION__, __LINE__);
             ret = (OMX_ERRORTYPE)OMX_ErrorCodecEncode;
@@ -2023,54 +2061,50 @@ EXIT:
 
 OMX_ERRORTYPE Exynos_Mpeg4Enc_SrcOut(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX_DATA *pSrcOutputData)
 {
-    OMX_ERRORTYPE                  ret = OMX_ErrorNone;
-    EXYNOS_OMX_BASECOMPONENT      *pExynosComponent = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
-    EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
-    EXYNOS_MPEG4ENC_HANDLE         *pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
-    void                          *hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
-    EXYNOS_OMX_BASEPORT     *pExynosInputPort = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
-    ExynosVideoEncOps       *pEncOps    = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
-    ExynosVideoEncBufferOps *pInbufOps  = pMpeg4Enc->hMFCMpeg4Handle.pInbufOps;
-    ExynosVideoBuffer       *pVideoBuffer;
+    OMX_ERRORTYPE                    ret                = OMX_ErrorNone;
+    EXYNOS_OMX_BASECOMPONENT        *pExynosComponent   = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
+    EXYNOS_OMX_VIDEOENC_COMPONENT   *pVideoEnc          = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    EXYNOS_MPEG4ENC_HANDLE          *pMpeg4Enc          = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;
+    void                            *hMFCHandle         = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
+    EXYNOS_OMX_BASEPORT             *pExynosInputPort   = &pExynosComponent->pExynosPort[INPUT_PORT_INDEX];
+
+    ExynosVideoEncOps       *pEncOps        = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
+    ExynosVideoEncBufferOps *pInbufOps      = pMpeg4Enc->hMFCMpeg4Handle.pInbufOps;
+    ExynosVideoBuffer       *pVideoBuffer   = NULL;
     ExynosVideoBuffer        videoBuffer;
 
     FunctionIn();
 
-    if ((pExynosInputPort->bStoreMetaData == OMX_TRUE) &&
-        (pExynosInputPort->bufferProcessType == BUFFER_SHARE)) {
-        if (pInbufOps->ExtensionDequeue(hMFCHandle, &videoBuffer) == VIDEO_ERROR_NONE)
-            pVideoBuffer = &videoBuffer;
-        else
-            pVideoBuffer = NULL;
-    } else {
-        pVideoBuffer = pInbufOps->Dequeue(hMFCHandle);
-    }
+    if (pInbufOps->ExtensionDequeue(hMFCHandle, &videoBuffer) == VIDEO_ERROR_NONE)
+        pVideoBuffer = &videoBuffer;
+    else
+        pVideoBuffer = NULL;
 
     pSrcOutputData->dataLen       = 0;
     pSrcOutputData->usedDataLen   = 0;
     pSrcOutputData->remainDataLen = 0;
-    pSrcOutputData->nFlags    = 0;
-    pSrcOutputData->timeStamp = 0;
+    pSrcOutputData->nFlags        = 0;
+    pSrcOutputData->timeStamp     = 0;
+    pSrcOutputData->allocSize     = 0;
+    pSrcOutputData->bufferHeader  = NULL;
 
     if (pVideoBuffer == NULL) {
-        pSrcOutputData->buffer.singlePlaneBuffer.dataBuffer = NULL;
-        pSrcOutputData->allocSize  = 0;
+        pSrcOutputData->multiPlaneBuffer.dataBuffer[0] = NULL;
         pSrcOutputData->pPrivate = NULL;
-        pSrcOutputData->bufferHeader = NULL;
     } else {
-        int plane = 0;
-        for (plane = 0; plane < MFC_INPUT_BUFFER_PLANE; plane++) {
-            pSrcOutputData->buffer.multiPlaneBuffer.dataBuffer[plane] = pVideoBuffer->planes[plane].addr;
-            pSrcOutputData->buffer.multiPlaneBuffer.fd[plane] = pVideoBuffer->planes[plane].fd;
+        int plane = 0, nPlaneCnt;
+        nPlaneCnt = Exynos_GetPlaneFromPort(pExynosInputPort);
+        for (plane = 0; plane < nPlaneCnt; plane++) {
+            pSrcOutputData->multiPlaneBuffer.dataBuffer[plane] = pVideoBuffer->planes[plane].addr;
+            pSrcOutputData->multiPlaneBuffer.fd[plane] = pVideoBuffer->planes[plane].fd;
+
+            pSrcOutputData->allocSize += pVideoBuffer->planes[plane].allocSize;
         }
-        pSrcOutputData->allocSize = pVideoBuffer->planes[0].allocSize +
-                                        pVideoBuffer->planes[1].allocSize +
-                                        pVideoBuffer->planes[2].allocSize;
 
         if (pExynosInputPort->bufferProcessType & BUFFER_COPY) {
             int i;
             for (i = 0; i < MFC_INPUT_BUFFER_NUM_MAX; i++) {
-                if (pSrcOutputData->buffer.multiPlaneBuffer.dataBuffer[0] ==
+                if (pSrcOutputData->multiPlaneBuffer.dataBuffer[0] ==
                         pVideoEnc->pMFCEncInputBuffer[i]->pVirAddr[0]) {
                     pVideoEnc->pMFCEncInputBuffer[i]->dataSize = 0;
                     pSrcOutputData->pPrivate = pVideoEnc->pMFCEncInputBuffer[i];
@@ -2086,7 +2120,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_SrcOut(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OM
         }
 
         /* For Share Buffer */
-        pSrcOutputData->bufferHeader = (OMX_BUFFERHEADERTYPE*)pVideoBuffer->pPrivate;
+        if (pExynosInputPort->bufferProcessType == BUFFER_SHARE)
+            pSrcOutputData->bufferHeader = (OMX_BUFFERHEADERTYPE*)pVideoBuffer->pPrivate;
     }
 
     ret = OMX_ErrorNone;
@@ -2104,6 +2139,7 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_DstIn(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX
     EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
     EXYNOS_MPEG4ENC_HANDLE         *pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
     void                          *hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
+    EXYNOS_OMX_BASEPORT     *pExynosOutputPort = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
     ExynosVideoEncOps       *pEncOps    = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
     ExynosVideoEncBufferOps *pOutbufOps = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
     OMX_U32 dataLen = 0;
@@ -2111,15 +2147,22 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_DstIn(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX
 
     FunctionIn();
 
-    if (pDstInputData->buffer.singlePlaneBuffer.dataBuffer == NULL) {
+    if (pDstInputData->multiPlaneBuffer.dataBuffer[0] == NULL) {
         Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "Failed to find input buffer");
         ret = OMX_ErrorBadParameter;
         goto EXIT;
     }
 
-    codecReturn = pOutbufOps->Enqueue(hMFCHandle, (unsigned char **)&pDstInputData->buffer.singlePlaneBuffer.dataBuffer,
-                     (unsigned int *)&dataLen, MFC_OUTPUT_BUFFER_PLANE, pDstInputData->bufferHeader);
+    OMX_U32 nAllocLen[VIDEO_BUFFER_MAX_PLANES] = {0, 0, 0};
+    nAllocLen[0] = pExynosOutputPort->portDefinition.format.video.nFrameWidth * pExynosOutputPort->portDefinition.format.video.nFrameHeight * 3 / 2;
 
+    codecReturn = pOutbufOps->ExtensionEnqueue(hMFCHandle,
+                                (void **)pDstInputData->multiPlaneBuffer.dataBuffer,
+                                (int *)pDstInputData->multiPlaneBuffer.fd,
+                                (unsigned long *)nAllocLen,
+                                (unsigned long *)&dataLen,
+                                Exynos_GetPlaneFromPort(pExynosOutputPort),
+                                pDstInputData->bufferHeader);
     if (codecReturn != VIDEO_ERROR_NONE) {
         Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "%s: %d: Failed - pOutbufOps->Enqueue", __FUNCTION__, __LINE__);
         ret = (OMX_ERRORTYPE)OMX_ErrorCodecEncode;
@@ -2137,17 +2180,20 @@ EXIT:
 
 OMX_ERRORTYPE Exynos_Mpeg4Enc_DstOut(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OMX_DATA *pDstOutputData)
 {
-    OMX_ERRORTYPE                  ret = OMX_ErrorNone;
-    EXYNOS_OMX_BASECOMPONENT      *pExynosComponent = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
-    EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
-    EXYNOS_MPEG4ENC_HANDLE         *pMpeg4Enc = (EXYNOS_MPEG4ENC_HANDLE *)((EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle)->hCodecHandle;
+    OMX_ERRORTYPE                  ret               = OMX_ErrorNone;
+    EXYNOS_OMX_BASECOMPONENT      *pExynosComponent  = (EXYNOS_OMX_BASECOMPONENT *)pOMXComponent->pComponentPrivate;
+    EXYNOS_OMX_VIDEOENC_COMPONENT *pVideoEnc         = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
+    EXYNOS_MPEG4ENC_HANDLE        *pMpeg4Enc         = (EXYNOS_MPEG4ENC_HANDLE *)pVideoEnc->hCodecHandle;
     EXYNOS_OMX_BASEPORT           *pExynosOutputPort = &pExynosComponent->pExynosPort[OUTPUT_PORT_INDEX];
-    void                          *hMFCHandle = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
-    ExynosVideoEncOps       *pEncOps    = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
-    ExynosVideoEncBufferOps *pOutbufOps = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
-    ExynosVideoBuffer       *pVideoBuffer;
-    ExynosVideoFrameStatusType displayStatus = VIDEO_FRAME_STATUS_UNKNOWN;
-    ExynosVideoGeometry bufferGeometry;
+    void                          *hMFCHandle        = pMpeg4Enc->hMFCMpeg4Handle.hMFCHandle;
+
+    ExynosVideoEncOps           *pEncOps        = pMpeg4Enc->hMFCMpeg4Handle.pEncOps;
+    ExynosVideoEncBufferOps     *pOutbufOps     = pMpeg4Enc->hMFCMpeg4Handle.pOutbufOps;
+    ExynosVideoBuffer           *pVideoBuffer   = NULL;
+    ExynosVideoBuffer            videoBuffer;
+    ExynosVideoFrameStatusType   displayStatus  = VIDEO_FRAME_STATUS_UNKNOWN;
+    ExynosVideoErrorType         codecReturn    = VIDEO_ERROR_NONE;
+
     OMX_S32 indexTimestamp = 0;
 
     FunctionIn();
@@ -2157,7 +2203,16 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_DstOut(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OM
         goto EXIT;
     }
 
-    if ((pVideoBuffer = pOutbufOps->Dequeue(hMFCHandle)) == NULL) {
+    codecReturn = pOutbufOps->ExtensionDequeue(hMFCHandle, &videoBuffer);
+    if (codecReturn == VIDEO_ERROR_NONE) {
+        pVideoBuffer = &videoBuffer;
+    } else if (codecReturn == VIDEO_ERROR_DQBUF_EIO) {
+        Exynos_OSAL_Log(EXYNOS_LOG_ERROR, "HW is not available");
+        pVideoBuffer = NULL;
+        ret = OMX_ErrorHardware;
+        goto EXIT;
+    } else {
+        pVideoBuffer = NULL;
         ret = OMX_ErrorNone;
         goto EXIT;
     }
@@ -2165,8 +2220,8 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_DstOut(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OM
     pMpeg4Enc->hMFCMpeg4Handle.outputIndexTimestamp++;
     pMpeg4Enc->hMFCMpeg4Handle.outputIndexTimestamp %= MAX_TIMESTAMP;
 
-    pDstOutputData->buffer.singlePlaneBuffer.dataBuffer = pVideoBuffer->planes[0].addr;
-    pDstOutputData->buffer.singlePlaneBuffer.fd = pVideoBuffer->planes[0].fd;
+    pDstOutputData->multiPlaneBuffer.dataBuffer[0] = pVideoBuffer->planes[0].addr;
+    pDstOutputData->multiPlaneBuffer.fd[0] = pVideoBuffer->planes[0].fd;
     pDstOutputData->allocSize   = pVideoBuffer->planes[0].allocSize;
     pDstOutputData->dataLen     = pVideoBuffer->planes[0].dataSize;
     pDstOutputData->remainDataLen = pVideoBuffer->planes[0].dataSize;
@@ -2176,9 +2231,9 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_DstOut(OMX_COMPONENTTYPE *pOMXComponent, EXYNOS_OM
         int i = 0;
         pDstOutputData->pPrivate = NULL;
         for (i = 0; i < MFC_OUTPUT_BUFFER_NUM_MAX; i++) {
-            if (pDstOutputData->buffer.singlePlaneBuffer.dataBuffer ==
+            if (pDstOutputData->multiPlaneBuffer.dataBuffer[0] ==
                 pVideoEnc->pMFCEncOutputBuffer[i]->pVirAddr[0]) {
-                pDstOutputData->pPrivate = pVideoEnc->pMFCEncOutputBuffer[i]->pVirAddr[0];
+                pDstOutputData->pPrivate = pVideoEnc->pMFCEncOutputBuffer[i];
                 break;
             }
         }
@@ -2330,6 +2385,22 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_dstInputBufferProcess(OMX_COMPONENTTYPE *pOMXCompo
             Exynos_OSAL_SignalWait(pMpeg4Enc->hDestinationStartEvent, DEF_MAX_WAIT_TIME);
             Exynos_OSAL_SignalReset(pMpeg4Enc->hDestinationStartEvent);
         }
+
+        if (Exynos_OSAL_GetElemNum(&pMpeg4Enc->bypassBufferInfoQ) > 0) {
+            BYPASS_BUFFER_INFO *pBufferInfo = (BYPASS_BUFFER_INFO *)Exynos_OSAL_Dequeue(&pMpeg4Enc->bypassBufferInfoQ);
+            if (pBufferInfo == NULL) {
+                ret = OMX_ErrorUndefined;
+                goto EXIT;
+            }
+
+            pDstInputData->bufferHeader->nFlags     = pBufferInfo->nFlags;
+            pDstInputData->bufferHeader->nTimeStamp = pBufferInfo->timeStamp;
+            Exynos_OMX_OutputBufferReturn(pOMXComponent, pDstInputData->bufferHeader);
+            Exynos_OSAL_Free(pBufferInfo);
+
+            ret = OMX_ErrorNone;
+            goto EXIT;
+        }
     }
     if (pMpeg4Enc->hMFCMpeg4Handle.bConfiguredMFCDst == OMX_TRUE) {
         ret = Exynos_Mpeg4Enc_DstIn(pOMXComponent, pDstInputData);
@@ -2370,6 +2441,38 @@ OMX_ERRORTYPE Exynos_Mpeg4Enc_dstOutputBufferProcess(OMX_COMPONENTTYPE *pOMXComp
            (!CHECK_PORT_BEING_FLUSHED(pExynosOutputPort))) {
             Exynos_OSAL_SignalWait(pMpeg4Enc->hDestinationStartEvent, DEF_MAX_WAIT_TIME);
             Exynos_OSAL_SignalReset(pMpeg4Enc->hDestinationStartEvent);
+        }
+
+        if (Exynos_OSAL_GetElemNum(&pMpeg4Enc->bypassBufferInfoQ) > 0) {
+            EXYNOS_OMX_DATABUFFER *dstOutputUseBuffer   = &pExynosOutputPort->way.port2WayDataBuffer.outputDataBuffer;
+            OMX_BUFFERHEADERTYPE  *pOMXBuffer           = NULL;
+            BYPASS_BUFFER_INFO    *pBufferInfo          = NULL;
+
+            if (dstOutputUseBuffer->dataValid == OMX_FALSE) {
+                pOMXBuffer = Exynos_OutputBufferGetQueue_Direct(pExynosComponent);
+                if (pOMXBuffer == NULL) {
+                    ret = OMX_ErrorUndefined;
+                    goto EXIT;
+                }
+            } else {
+                pOMXBuffer = dstOutputUseBuffer->bufferHeader;
+            }
+
+            pBufferInfo = Exynos_OSAL_Dequeue(&pMpeg4Enc->bypassBufferInfoQ);
+            if (pBufferInfo == NULL) {
+                ret = OMX_ErrorUndefined;
+                goto EXIT;
+            }
+
+            pOMXBuffer->nFlags      = pBufferInfo->nFlags;
+            pOMXBuffer->nTimeStamp  = pBufferInfo->timeStamp;
+            Exynos_OMX_OutputBufferReturn(pOMXComponent, pOMXBuffer);
+            Exynos_OSAL_Free(pBufferInfo);
+
+            dstOutputUseBuffer->dataValid = OMX_FALSE;
+
+            ret = OMX_ErrorNone;
+            goto EXIT;
         }
     }
     ret = Exynos_Mpeg4Enc_DstOut(pOMXComponent, pDstOutputData);
@@ -2444,8 +2547,13 @@ OSCL_EXPORT_REF OMX_ERRORTYPE Exynos_OMX_ComponentInit(
     Exynos_OSAL_Memset(pMpeg4Enc, 0, sizeof(EXYNOS_MPEG4ENC_HANDLE));
     pVideoEnc = (EXYNOS_OMX_VIDEOENC_COMPONENT *)pExynosComponent->hComponentHandle;
     pVideoEnc->hCodecHandle = (OMX_HANDLETYPE)pMpeg4Enc;
-    pMpeg4Enc->hMFCMpeg4Handle.codecType = codecType;
+    pVideoEnc->qpRange.videoMinQP = 10;
+    pVideoEnc->qpRange.videoMaxQP = 30;
+    pVideoEnc->quantization.nQpI = 4;
+    pVideoEnc->quantization.nQpP = 5;
+    pVideoEnc->quantization.nQpB = 5;
 
+    pMpeg4Enc->hMFCMpeg4Handle.codecType = codecType;
     if (codecType == CODEC_TYPE_MPEG4)
         Exynos_OSAL_Strcpy(pExynosComponent->componentName, EXYNOS_OMX_COMPONENT_MPEG4_ENC);
     else
@@ -2558,6 +2666,8 @@ OSCL_EXPORT_REF OMX_ERRORTYPE Exynos_OMX_ComponentInit(
     pVideoEnc->exynos_codec_getCodecInputPrivateData  = &GetCodecInputPrivateData;
     pVideoEnc->exynos_codec_getCodecOutputPrivateData = &GetCodecOutputPrivateData;
 
+    pVideoEnc->exynos_codec_checkFormatSupport = &CheckFormatHWSupport;
+
     pVideoEnc->hSharedMemory = Exynos_OSAL_SharedMemory_Open();
     if (pVideoEnc->hSharedMemory == NULL) {
         Exynos_OSAL_Free(pMpeg4Enc);
@@ -2566,6 +2676,26 @@ OSCL_EXPORT_REF OMX_ERRORTYPE Exynos_OMX_ComponentInit(
         ret = OMX_ErrorInsufficientResources;
         goto EXIT;
     }
+
+    if (pMpeg4Enc->hMFCMpeg4Handle.codecType == CODEC_TYPE_MPEG4)
+        pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.eCodecType = VIDEO_CODING_MPEG4;
+    else
+        pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.eCodecType = VIDEO_CODING_H263;
+
+    if (pVideoEnc->bDRMPlayerMode == OMX_TRUE)
+        pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.eSecurityType = VIDEO_SECURE;
+    else
+        pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.eSecurityType = VIDEO_NORMAL;
+
+    if (Exynos_Video_GetInstInfo(&(pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo), VIDEO_FALSE /* enc */) != VIDEO_ERROR_NONE) {
+        ret = OMX_ErrorUndefined;
+        goto EXIT;
+    }
+
+    if (pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.specificInfo.enc.nSpareSize > 0)
+        pVideoEnc->nInbufSpareSize = pMpeg4Enc->hMFCMpeg4Handle.videoInstInfo.specificInfo.enc.nSpareSize;
+
+    Exynos_Input_SetSupportFormat(pExynosComponent);
 
     pExynosComponent->currentState = OMX_StateLoaded;
 
